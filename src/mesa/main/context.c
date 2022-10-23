@@ -1206,6 +1206,9 @@ _mesa_initialize_context(struct gl_context *ctx,
 
    ctx->FirstTimeCurrent = GL_TRUE;
 
+   // init read mappings list
+   list_inithead(&ctx->read_mappings);
+
    return GL_TRUE;
 
 fail:

@@ -2814,6 +2814,23 @@ _mesa_ClearNamedBufferSubDataEXT(GLuint buffer, GLenum internalformat,
 static GLboolean
 unmap_buffer(struct gl_context *ctx, struct gl_buffer_object *bufObj)
 {
+
+	if(bufObj->Mappings[MAP_USER].ShadowPointer){
+		// this buffer was shadowed, so the data has to be copied from the shadow buffer to the real buffer before unmapping (currently only shadowing write mappings)
+		memcpy(bufObj->Mappings[MAP_USER].Pointer, bufObj->Mappings[MAP_USER].ShadowPointer, bufObj->Mappings[MAP_USER].Length);
+		free(bufObj->Mappings[MAP_USER].ShadowPointer);	// free the shadow buffer
+		//bufObj->Mappings[MAP_USER].Pointer = bufObj->Mappings[MAP_USER].RealPointer;	// put the original pointer back in its spot for the actual unmap function
+		bufObj->Mappings[MAP_USER].ShadowPointer = NULL;
+		printf("flushed and unmapped shadow buffer\n");
+
+		if(bufObj->list_entry){
+			// remove this mapping from the read mapping list
+			list_del(&bufObj->list_entry->list);
+			free(bufObj->list_entry);
+			bufObj->list_entry = NULL;
+		}
+	}
+
    GLboolean status = ctx->Driver.UnmapBuffer(ctx, bufObj, MAP_USER);
    bufObj->Mappings[MAP_USER].AccessFlags = 0;
    assert(bufObj->Mappings[MAP_USER].Pointer == NULL);
@@ -3510,6 +3527,8 @@ map_buffer_range(struct gl_context *ctx, struct gl_buffer_object *bufObj,
    }
 
    assert(ctx->Driver.MapBufferRange);
+   printf("User mapped Buffer with flags%s%s%s%s%s%s\n",(access & GL_MAP_READ_BIT) ? " GL_MAP_READ" : "",(access & GL_MAP_WRITE_BIT) ? " GL_MAP_WRITE" : "",(access & GL_MAP_COHERENT_BIT) ? " GL_MAP_COHERENT" : "",
+       			(access & GL_MAP_PERSISTENT_BIT) ? " GL_MAP_PERSISTENT" : "",(access & (GL_MAP_INVALIDATE_RANGE_BIT|GL_MAP_INVALIDATE_BUFFER_BIT)) ? " GL_MAP_INVALIDATE" : "",(access & GL_MAP_FLUSH_EXPLICIT_BIT) ? " GL_MAP_FLUSH_EXPLICIT" : "");
    void *map = ctx->Driver.MapBufferRange(ctx, offset, length, access, bufObj,
                                           MAP_USER);
    if (!map) {
@@ -3526,9 +3545,29 @@ map_buffer_range(struct gl_context *ctx, struct gl_buffer_object *bufObj,
       assert(bufObj->Mappings[MAP_USER].AccessFlags == access);
    }
 
+   if(!(access & GL_MAP_COHERENT_BIT)){
+ 	  // set up the shadow buffer, since this isn't a coherent mapping
+ 	  GLvoid* shadow = malloc(length);
+   	  map = shadow;	// to return the correct pointer
+   	  bufObj->Mappings[MAP_USER].ShadowPointer = shadow;
+   }
+
    if (access & GL_MAP_WRITE_BIT) {
       bufObj->Written = GL_TRUE;
       bufObj->MinMaxCacheDirty = true;
+   }
+
+   if(access & GL_MAP_READ_BIT){
+	   // create the entry for the read mapping list and add it to the list
+	   struct shadowed_read_mapping_entry* entry = malloc(sizeof(struct shadowed_read_mapping_entry));
+	   list_inithead(&entry->list);
+	   // add this entry at the beginning of the list, as the order doesn't really matter, and this is easier
+   	   list_add(&ctx->read_mappings,&entry->list);
+   	   bufObj->list_entry = entry;
+   	   entry->bufObj = bufObj;
+
+   	   // copy the data from the real buffer into the shadow buffer, as this is a read mapping
+   	   memcpy(bufObj->Mappings[MAP_USER].ShadowPointer, bufObj->Mappings[MAP_USER].Pointer, length);
    }
 
 #ifdef VBO_DEBUG
@@ -3839,6 +3878,12 @@ flush_mapped_buffer_range(struct gl_context *ctx,
 
    assert(bufObj->Mappings[MAP_USER].AccessFlags & GL_MAP_WRITE_BIT);
 
+   if(bufObj->Mappings[MAP_USER].ShadowPointer){
+	   // copy the data
+	   memcpy((void*)((char*)bufObj->Mappings[MAP_USER].Pointer + offset), (void*)((char*)bufObj->Mappings[MAP_USER].ShadowPointer + offset), length);
+	   //printf("flushed shadow buffer\n");
+   }
+
    if (ctx->Driver.FlushMappedBufferRange)
       ctx->Driver.FlushMappedBufferRange(ctx, offset, length, bufObj,
                                          MAP_USER);
@@ -3958,7 +4003,8 @@ bind_buffer_range_uniform_buffer_err(struct gl_context *ctx, GLuint index,
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glBindBufferRange(offset misaligned %d/%d)", (int) offset,
 		  ctx->Const.UniformBufferOffsetAlignment);
-      return;
+      printf("UBO\n");
+      //return;
    }
 
    bind_buffer_range_uniform_buffer(ctx, index, bufObj, offset, size);
@@ -4002,7 +4048,8 @@ bind_buffer_range_shader_storage_buffer_err(struct gl_context *ctx,
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glBindBufferRange(offset misaligned %d/%d)", (int) offset,
                   ctx->Const.ShaderStorageBufferOffsetAlignment);
-      return;
+      printf("SSB\n");
+      //return;
    }
 
    bind_buffer_range_shader_storage_buffer(ctx, index, bufObj, offset, size);

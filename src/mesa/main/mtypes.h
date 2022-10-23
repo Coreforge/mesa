@@ -1339,6 +1339,7 @@ struct gl_buffer_mapping
    GLvoid *Pointer;        /**< User-space address of mapping */
    GLintptr Offset;        /**< Mapped offset */
    GLsizeiptr Length;      /**< Mapped length */
+   GLvoid *ShadowPointer;		// User-space address of the shadow buffer if one is used
 };
 
 
@@ -1420,6 +1421,8 @@ struct gl_buffer_object
    bool MinMaxCacheDirty;
 
    bool HandleAllocated; /**< GL_ARB_bindless_texture */
+
+   struct shadowed_read_mapping_entry* list_entry;
 };
 
 
@@ -5168,6 +5171,14 @@ struct gl_attrib_node
    } Viewport;
 };
 
+// linked list for all read mappings in order to be able to flush them
+
+struct shadowed_read_mapping_entry{
+	struct gl_buffer_object* bufObj;
+
+	struct list_head list;
+};
+
 /**
  * Mesa rendering context.
  *
@@ -5581,6 +5592,9 @@ struct gl_context
    /*@}*/
 
    bool shader_builtin_ref;
+
+   // keeps track of shadowed (non-coherent) read mappings
+   struct list_head read_mappings;
 };
 
 /**

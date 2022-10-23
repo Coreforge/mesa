@@ -63,8 +63,19 @@ _mesa_MemoryBarrier(GLbitfield barriers)
 {
    GET_CURRENT_CONTEXT(ctx);
 
+
+
    if (ctx->Driver.MemoryBarrier)
       ctx->Driver.MemoryBarrier(ctx, barriers);
+
+   if(barriers & (GL_BUFFER_UPDATE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT)){
+   	   printf("Synchronising read mappings\n");
+   	   struct shadowed_read_mapping_entry* entry;
+   	   LIST_FOR_EACH_ENTRY(entry,&ctx->read_mappings,list){
+   		   printf("copying data\n");
+   		   memcpy(entry->bufObj->Mappings[MAP_USER].ShadowPointer, entry->bufObj->Mappings[MAP_USER].Pointer, entry->bufObj->Mappings[MAP_USER].Length);
+       }
+   }
 }
 
 static ALWAYS_INLINE void
